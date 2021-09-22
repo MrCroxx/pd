@@ -91,13 +91,13 @@ func (s *testBuilderSuite) TestRecord(c *C) {
 	c.Assert(s.newBuilder().AddPeer(&metapb.Peer{StoreId: 4}).err, IsNil)
 	c.Assert(s.newBuilder().PromoteLearner(1).err, NotNil)
 	c.Assert(s.newBuilder().PromoteLearner(3).err, IsNil)
-	c.Assert(s.newBuilder().SetLeader(1).SetLeader(2).err, IsNil)
-	c.Assert(s.newBuilder().SetLeader(3).err, NotNil)
+	c.Assert(s.newBuilder().SetLeaders([]uint64{1}).SetLeaders([]uint64{2}).err, IsNil)
+	c.Assert(s.newBuilder().SetLeaders([]uint64{3}).err, NotNil)
 	c.Assert(s.newBuilder().RemovePeer(4).err, NotNil)
 	c.Assert(s.newBuilder().AddPeer(&metapb.Peer{StoreId: 4, Role: metapb.PeerRole_Learner}).RemovePeer(4).err, IsNil)
-	c.Assert(s.newBuilder().SetLeader(2).RemovePeer(2).err, NotNil)
+	c.Assert(s.newBuilder().SetLeaders([]uint64{2}).RemovePeer(2).err, NotNil)
 	c.Assert(s.newBuilder().PromoteLearner(4).err, NotNil)
-	c.Assert(s.newBuilder().SetLeader(4).err, NotNil)
+	c.Assert(s.newBuilder().SetLeaders([]uint64{4}).err, NotNil)
 	c.Assert(s.newBuilder().SetPeers(map[uint64]*metapb.Peer{2: {Id: 2}}).err, NotNil)
 
 	m := map[uint64]*metapb.Peer{
@@ -423,7 +423,7 @@ func (s *testBuilderSuite) TestBuild(c *C) {
 		for _, p := range tc.targetPeers {
 			m[p.GetStoreId()] = p
 		}
-		builder.SetPeers(m).SetLeader(tc.targetPeers[0].GetStoreId())
+		builder.SetPeers(m).SetLeaders([]uint64{tc.targetPeers[0].GetStoreId()})
 		op, err := builder.Build(0)
 		if len(tc.steps) == 0 {
 			c.Assert(err, NotNil)
@@ -492,11 +492,11 @@ func (s *testBuilderSuite) TestTargetUnhealthyPeer(c *C) {
 	region = core.NewRegionInfo(&metapb.Region{Id: 1, Peers: []*metapb.Peer{{Id: 1, StoreId: 1},
 		p}}, &metapb.Peer{Id: 1, StoreId: 1}, core.WithPendingPeers([]*metapb.Peer{p}))
 	builder = NewBuilder("test", s.cluster, region)
-	builder.SetLeader(2)
+	builder.SetLeaders([]uint64{2})
 	c.Assert(builder.err, NotNil)
 	region = core.NewRegionInfo(&metapb.Region{Id: 1, Peers: []*metapb.Peer{{Id: 1, StoreId: 1},
 		p}}, &metapb.Peer{Id: 1, StoreId: 1}, core.WithDownPeers([]*pdpb.PeerStats{{Peer: p}}))
 	builder = NewBuilder("test", s.cluster, region)
-	builder.SetLeader(2)
+	builder.SetLeaders([]uint64{2})
 	c.Assert(builder.err, NotNil)
 }

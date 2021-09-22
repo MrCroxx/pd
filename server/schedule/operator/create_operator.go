@@ -52,16 +52,16 @@ func CreateRemovePeerOperator(desc string, cluster opt.Cluster, kind OpKind, reg
 }
 
 // CreateTransferLeaderOperator creates an operator that transfers the leader from a source store to a target store.
-func CreateTransferLeaderOperator(desc string, cluster opt.Cluster, region *core.RegionInfo, sourceStoreID uint64, targetStoreID uint64, kind OpKind) (*Operator, error) {
+func CreateTransferLeaderOperator(desc string, cluster opt.Cluster, region *core.RegionInfo, sourceStoreID uint64, targetStoreIDs []uint64, kind OpKind) (*Operator, error) {
 	return NewBuilder(desc, cluster, region, SkipOriginJointStateCheck).
-		SetLeader(targetStoreID).
+		SetLeaders(targetStoreIDs).
 		Build(kind)
 }
 
 // CreateForceTransferLeaderOperator creates an operator that transfers the leader from a source store to a target store forcible.
-func CreateForceTransferLeaderOperator(desc string, cluster opt.Cluster, region *core.RegionInfo, sourceStoreID uint64, targetStoreID uint64, kind OpKind) (*Operator, error) {
+func CreateForceTransferLeaderOperator(desc string, cluster opt.Cluster, region *core.RegionInfo, sourceStoreID uint64, targetStoreIDs []uint64, kind OpKind) (*Operator, error) {
 	return NewBuilder(desc, cluster, region, SkipOriginJointStateCheck).
-		SetLeader(targetStoreID).
+		SetLeaders(targetStoreIDs).
 		EnableForceTargetLeader().
 		Build(kind)
 }
@@ -93,7 +93,7 @@ func CreateReplaceLeaderPeerOperator(desc string, cluster opt.Cluster, region *c
 	return NewBuilder(desc, cluster, region).
 		RemovePeer(oldStore).
 		AddPeer(peer).
-		SetLeader(leader.GetStoreId()).
+		SetLeaders([]uint64{leader.GetStoreId()}).
 		Build(kind)
 }
 
@@ -102,7 +102,7 @@ func CreateMoveLeaderOperator(desc string, cluster opt.Cluster, region *core.Reg
 	return NewBuilder(desc, cluster, region).
 		RemovePeer(oldStore).
 		AddPeer(peer).
-		SetLeader(peer.GetStoreId()).
+		SetLeaders([]uint64{peer.GetStoreId()}).
 		Build(kind)
 }
 
@@ -203,7 +203,7 @@ func CreateScatterRegionOperator(desc string, cluster opt.Cluster, origin *core.
 	}
 	return NewBuilder(desc, cluster, origin).
 		SetPeers(targetPeers).
-		SetLeader(leader).
+		SetLeaders([]uint64{leader}).
 		EnableLightWeight().
 		// EnableForceTargetLeader in order to ignore the leader schedule limit
 		EnableForceTargetLeader().

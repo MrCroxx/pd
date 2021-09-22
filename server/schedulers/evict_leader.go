@@ -284,14 +284,18 @@ func scheduleEvictLeaderOnce(name string, cluster opt.Cluster, storeRanges map[u
 			continue
 		}
 
-		target := filter.NewCandidates(cluster.GetFollowerStores(region)).
+		targets := filter.NewCandidates(cluster.GetFollowerStores(region)).
 			FilterTarget(cluster.GetOpts(), &filter.StoreStateFilter{ActionScope: EvictLeaderName, TransferLeader: true}).
-			RandomPick()
-		if target == nil {
+			PickAll()
+		if len(targets) == 0 {
 			schedulerCounter.WithLabelValues(name, "no-target-store").Inc()
 			continue
 		}
-		op, err := operator.CreateTransferLeaderOperator(EvictLeaderType, cluster, region, region.GetLeader().GetStoreId(), target.GetID(), operator.OpLeader)
+		targetStoreIDs := make([]uint64, 0, len(targets))
+		for _, target := range targets {
+			targetStoreIDs = append(targetStoreIDs, target.GetID())
+		}
+		op, err := operator.CreateTransferLeaderOperator(EvictLeaderType, cluster, region, region.GetLeader().GetStoreId(), targetStoreIDs, operator.OpLeader)
 		if err != nil {
 			log.Debug("fail to create evict leader operator", errs.ZapError(err))
 			continue

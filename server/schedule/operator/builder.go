@@ -46,12 +46,12 @@ type Builder struct {
 	expectedRoles map[uint64]placement.PeerRoleType
 
 	// operation record
-	originPeers         peersMap
-	unhealthyPeers      peersMap
-	originLeaderStoreID uint64
-	targetPeers         peersMap
-	targetLeaderStoreID uint64
-	err                 error
+	originPeers          peersMap
+	unhealthyPeers       peersMap
+	originLeaderStoreID  uint64
+	targetPeers          peersMap
+	targetLeaderStoreIDs map[uint64]struct{}
+	err                  error
 
 	// skip origin check flags
 	skipOriginJointStateCheck bool
@@ -178,7 +178,7 @@ func (b *Builder) RemovePeer(storeID uint64) *Builder {
 	}
 	if _, ok := b.targetPeers[storeID]; !ok {
 		b.err = errors.Errorf("cannot remove peer from %d: not found", storeID)
-	} else if b.targetLeaderStoreID == storeID {
+	} else if _, ok := b.targetLeaderStoreIDs[storeID]; ok {
 		b.err = errors.Errorf("cannot remove peer from %d: is target leader", storeID)
 	} else {
 		delete(b.targetPeers, storeID)
@@ -226,19 +226,24 @@ func (b *Builder) DemoteVoter(storeID uint64) *Builder {
 	return b
 }
 
-// SetLeader records the target leader in Builder.
-func (b *Builder) SetLeader(storeID uint64) *Builder {
+// SetLeaders records the target leader in Builder.
+//
+// SetLeaders receive a list of valid store IDs as candidates, and let
+// TiKV to decide which one to become the new leader.
+func (b *Builder) SetLeaders(storeIDs []uint64) *Builder {
 	if b.err != nil {
 		return b
 	}
-	if peer, ok := b.targetPeers[storeID]; !ok {
-		b.err = errors.Errorf("cannot transfer leader to %d: not found", storeID)
-	} else if core.IsLearner(peer) {
-		b.err = errors.Errorf("cannot transfer leader to %d: not voter", storeID)
-	} else if _, ok := b.unhealthyPeers[storeID]; ok {
-		b.err = errors.Errorf("cannot transfer leader to %d: unhealthy", storeID)
-	} else {
-		b.targetLeaderStoreID = storeID
+	for _, storeID := range storeIDs {
+		if peer, ok := b.targetPeers[storeID]; !ok {
+			b.err = errors.Errorf("cannot transfer leader to %d: not found", storeID)
+		} else if core.IsLearner(peer) {
+			b.err = errors.Errorf("cannot transfer leader to %d: not voter", storeID)
+		} else if _, ok := b.unhealthyPeers[storeID]; ok {
+			b.err = errors.Errorf("cannot transfer leader to %d: unhealthy", storeID)
+		} else {
+			b.targetLeaderStoreIDs[storeID] = struct{}{}
+		}
 	}
 	return b
 }
@@ -259,8 +264,12 @@ func (b *Builder) SetPeers(peers map[uint64]*metapb.Peer) *Builder {
 		}
 	}
 
-	if _, ok := peers[b.targetLeaderStoreID]; !ok {
-		b.targetLeaderStoreID = 0
+	oldTargetLeaders := b.targetLeaderStoreIDs
+	b.targetLeaderStoreIDs = make(map[uint64]struct{})
+	for id, _ := range oldTargetLeaders {
+		if _, ok := peers[id]; ok {
+			b.targetLeaderStoreIDs[id] = struct{}{}
+		}
 	}
 
 	b.targetPeers = peersMap(peers).Copy()
@@ -268,7 +277,7 @@ func (b *Builder) SetPeers(peers map[uint64]*metapb.Peer) *Builder {
 }
 
 // SetExpectedRoles records expected roles of target peers.
-// It may update `targetLeaderStoreID` if there is a peer has role `leader` or `follower`.
+// It may update `targetLeaderStoreIDs` if there is a peer has role `leader` or `follower`.
 func (b *Builder) SetExpectedRoles(roles map[uint64]placement.PeerRoleType) *Builder {
 	if b.err != nil {
 		return b
@@ -277,18 +286,12 @@ func (b *Builder) SetExpectedRoles(roles map[uint64]placement.PeerRoleType) *Bui
 	for id, role := range roles {
 		switch role {
 		case placement.Leader:
-			if leaderCount > 0 {
-				b.err = errors.Errorf("region cannot have multiple leaders")
-				return b
-			}
-			b.targetLeaderStoreID = id
+			b.targetLeaderStoreIDs[id] = struct{}{}
 			leaderCount++
 		case placement.Voter:
 			voterCount++
 		case placement.Follower, placement.Learner:
-			if b.targetLeaderStoreID == id {
-				b.targetLeaderStoreID = 0
-			}
+			delete(b.targetLeaderStoreIDs, id)
 		}
 	}
 	if leaderCount+voterCount == 0 {
@@ -323,6 +326,7 @@ func (b *Builder) Build(kind OpKind) (*Operator, error) {
 		return nil, b.err
 	}
 
+	// TODO(MrCroxx): make ToStore compatiable with multi target leaders.
 	if b.useJointConsensus {
 		kind, b.err = b.buildStepsWithJointConsensus(kind)
 	} else {
@@ -333,6 +337,22 @@ func (b *Builder) Build(kind OpKind) (*Operator, error) {
 	}
 
 	return NewOperator(b.desc, brief, b.regionID, b.regionEpoch, kind, b.steps...), nil
+}
+
+func (b *Builder) maybeTransferLeader() bool {
+	if len(b.targetLeaderStoreIDs) == 0 {
+		return false
+	}
+	if len(b.targetLeaderStoreIDs) == 1 {
+		var targetLeaderStoreID uint64
+		for storeID, _ := range b.targetLeaderStoreIDs {
+			targetLeaderStoreID = storeID
+		}
+		if b.originLeaderStoreID == targetLeaderStoreID {
+			return false
+		}
+	}
+	return true
 }
 
 // Initialize intermediate states.
@@ -411,15 +431,22 @@ func (b *Builder) prepareBuild() (string, error) {
 	}
 
 	// If the target leader does not exist or is a Learner, the target is cancelled.
-	if peer, ok := b.targetPeers[b.targetLeaderStoreID]; !ok || core.IsLearner(peer) {
-		b.targetLeaderStoreID = 0
+	for storeID, _ := range b.targetLeaderStoreIDs {
+		if peer, ok := b.targetPeers[storeID]; !ok || core.IsLearner(peer) {
+			delete(b.targetLeaderStoreIDs, storeID)
+		}
 	}
 
 	b.currentPeers, b.currentLeaderStoreID = b.originPeers.Copy(), b.originLeaderStoreID
 
-	if b.targetLeaderStoreID != 0 {
-		targetLeader := b.targetPeers[b.targetLeaderStoreID]
-		if !b.allowLeader(targetLeader, b.forceTargetLeader) {
+	if len(b.targetLeaderStoreIDs) != 0 {
+		for storeID, _ := range b.targetLeaderStoreIDs {
+			targetLeader := b.targetPeers[storeID]
+			if !b.allowLeader(targetLeader, b.forceTargetLeader) {
+				delete(b.targetLeaderStoreIDs, storeID)
+			}
+		}
+		if len(b.targetLeaderStoreIDs) == 0 {
 			return "", errors.New("cannot create operator: target leader is not allowed")
 		}
 	}
@@ -451,8 +478,9 @@ func (b *Builder) brief() string {
 		return fmt.Sprintf("promote peer: store %s", b.toPromote)
 	case len(b.toDemote) > 0:
 		return fmt.Sprintf("demote peer: store %s", b.toDemote)
-	case b.originLeaderStoreID != b.targetLeaderStoreID:
-		return fmt.Sprintf("transfer leader: store %d to %d", b.originLeaderStoreID, b.targetLeaderStoreID)
+		return fmt.Sprintf("demote peer: store %s", b.toDemote)
+	case b.maybeTransferLeader():
+		return fmt.Sprintf("transfer leader: store %d to %s", b.originLeaderStoreID, b.targetLeaderStoreIDs)
 	default:
 		return ""
 	}
@@ -477,7 +505,7 @@ func (b *Builder) buildStepsWithJointConsensus(kind OpKind) (OpKind, error) {
 	}
 
 	b.setTargetLeaderIfNotExist()
-	if b.targetLeaderStoreID == 0 {
+	if len(b.targetLeaderStoreIDs) == 0 {
 		return kind, errors.New("no valid leader")
 	}
 
@@ -524,7 +552,7 @@ func (b *Builder) buildStepsWithJointConsensus(kind OpKind) (OpKind, error) {
 }
 
 func (b *Builder) setTargetLeaderIfNotExist() {
-	if b.targetLeaderStoreID != 0 {
+	if len(b.targetLeaderStoreIDs) != 0 {
 		return
 	}
 
@@ -622,7 +650,11 @@ func (b *Builder) buildStepsWithoutJointConsensus(kind OpKind) (OpKind, error) {
 		b.currentLeaderStoreID != b.targetLeaderStoreID &&
 		b.currentPeers[b.targetLeaderStoreID] != nil {
 		// Transfer only when target leader is legal.
-		b.execTransferLeader(b.targetLeaderStoreID)
+		leaderCandidates := make([]uint64, 0, len(b.targetLeaderStoreIDs))
+		for id, _ := range b.targetLeaderStoreIDs {
+			leaderCandidates = append(leaderCandidates, id)
+		}
+		b.execTransferLeader(leaderCandidates)
 		kind |= OpLeader
 	}
 
@@ -632,9 +664,8 @@ func (b *Builder) buildStepsWithoutJointConsensus(kind OpKind) (OpKind, error) {
 	return kind, nil
 }
 
-func (b *Builder) execTransferLeader(id uint64) {
-	b.steps = append(b.steps, TransferLeader{FromStore: b.currentLeaderStoreID, ToStore: id})
-	b.currentLeaderStoreID = id
+func (b *Builder) execTransferLeader(ids []uint64) {
+	b.steps = append(b.steps, TransferLeader{FromStore: b.currentLeaderStoreID, ToStore: b.currentLeaderStoreID, LeaderCandidates: ids})
 }
 
 func (b *Builder) execPromoteLearner(peer *metapb.Peer) {

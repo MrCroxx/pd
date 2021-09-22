@@ -42,6 +42,7 @@ type OpStep interface {
 // TransferLeader is an OpStep that transfers a region's leader.
 type TransferLeader struct {
 	FromStore, ToStore uint64
+	LeaderCandidates   []uint64
 }
 
 // ConfVerChanged returns the delta value for version increased by this step.
