@@ -46,12 +46,13 @@ type Builder struct {
 	expectedRoles map[uint64]placement.PeerRoleType
 
 	// operation record
-	originPeers         peersMap
-	unhealthyPeers      peersMap
-	originLeaderStoreID uint64
-	targetPeers         peersMap
-	targetLeaderStoreID uint64
-	err                 error
+	originPeers              peersMap
+	unhealthyPeers           peersMap
+	originLeaderStoreID      uint64
+	targetPeers              peersMap
+	targetLeaderStoreID      uint64
+	targetCandidatesStoreIDs []uint64
+	err                      error
 
 	// skip origin check flags
 	skipOriginJointStateCheck bool
@@ -239,6 +240,27 @@ func (b *Builder) SetLeader(storeID uint64) *Builder {
 		b.err = errors.Errorf("cannot transfer leader to %d: unhealthy", storeID)
 	} else {
 		b.targetLeaderStoreID = storeID
+	}
+	return b
+}
+
+// TODO(MrCroxx): review me
+// SetCandidates records potential leader candidates in Builder.
+func (b *Builder) SetCandidates(storeIDs []uint64) *Builder {
+	if b.err != nil {
+		return b
+	}
+	b.targetCandidatesStoreIDs = make([]uint64, 0, len(storeIDs))
+	for _, storeID := range storeIDs {
+		if peer, ok := b.targetPeers[storeID]; !ok {
+			b.err = errors.Errorf("cannot transfer leader to %d: not found", storeID)
+		} else if core.IsLearner(peer) {
+			b.err = errors.Errorf("cannot transfer leader to %d: not voter", storeID)
+		} else if _, ok := b.unhealthyPeers[storeID]; ok {
+			b.err = errors.Errorf("cannot transfer leader to %d: unhealthy", storeID)
+		} else {
+			b.targetCandidatesStoreIDs = append(b.targetCandidatesStoreIDs, storeID)
+		}
 	}
 	return b
 }
@@ -458,6 +480,7 @@ func (b *Builder) brief() string {
 	}
 }
 
+// TODO(MrCroxx): review me
 // Using Joint Consensus can ensure the replica safety and reduce the number of steps.
 func (b *Builder) buildStepsWithJointConsensus(kind OpKind) (OpKind, error) {
 	// Add all the peers as Learner first. Split `Add Voter` to `Add Learner + Promote`
@@ -477,7 +500,7 @@ func (b *Builder) buildStepsWithJointConsensus(kind OpKind) (OpKind, error) {
 	}
 
 	b.setTargetLeaderIfNotExist()
-	if b.targetLeaderStoreID == 0 {
+	if b.targetLeaderStoreID == 0 && len(b.targetCandidatesStoreIDs) == 0 {
 		return kind, errors.New("no valid leader")
 	}
 
@@ -493,25 +516,31 @@ func (b *Builder) buildStepsWithJointConsensus(kind OpKind) (OpKind, error) {
 		}
 	}
 
-	if targetLeaderBefore, ok := b.originPeers[b.targetLeaderStoreID]; ok && !core.IsLearner(targetLeaderBefore) {
-		// target leader is a voter in `originPeers`, transfer leader first.
-		if b.originLeaderStoreID != b.targetLeaderStoreID {
-			b.execTransferLeader(b.targetLeaderStoreID)
+	if b.targetLeaderStoreID != 0 {
+		if targetLeaderBefore, ok := b.originPeers[b.targetLeaderStoreID]; ok && !core.IsLearner(targetLeaderBefore) {
+			// target leader is a voter in `originPeers`, transfer leader first.
+			if b.originLeaderStoreID != b.targetLeaderStoreID {
+				b.execTransferLeader(b.targetLeaderStoreID)
+				kind |= OpLeader
+			}
+			b.execChangePeerV2(true, false)
+		} else if originLeaderAfter, ok := b.targetPeers[b.originLeaderStoreID]; b.originLeaderStoreID == 0 ||
+			(ok && !core.IsLearner(originLeaderAfter)) {
+			// origin leader is none or a voter in `targetPeers`, change peers first.
+			b.execChangePeerV2(true, false)
+			if b.originLeaderStoreID != b.targetLeaderStoreID {
+				b.execTransferLeader(b.targetLeaderStoreID)
+				kind |= OpLeader
+			}
+		} else {
+			// both demote origin leader and promote target leader, transfer leader in joint state.
+			b.execChangePeerV2(true, true)
 			kind |= OpLeader
 		}
-		b.execChangePeerV2(true, false)
-	} else if originLeaderAfter, ok := b.targetPeers[b.originLeaderStoreID]; b.originLeaderStoreID == 0 ||
-		(ok && !core.IsLearner(originLeaderAfter)) {
-		// origin leader is none or a voter in `targetPeers`, change peers first.
-		b.execChangePeerV2(true, false)
-		if b.originLeaderStoreID != b.targetLeaderStoreID {
-			b.execTransferLeader(b.targetLeaderStoreID)
-			kind |= OpLeader
-		}
-	} else {
-		// both demote origin leader and promote target leader, transfer leader in joint state.
-		b.execChangePeerV2(true, true)
-		kind |= OpLeader
+	} else if len(b.targetCandidatesStoreIDs) > 0 {
+		// TODO(MrCroxx): Temporary impl for experiment, only evit leader use it for now.
+		b.execTransferLeaderV2()
+		kind |= OpLeaderV2
 	}
 
 	// Finally, remove all the peers as Learner
@@ -523,8 +552,9 @@ func (b *Builder) buildStepsWithJointConsensus(kind OpKind) (OpKind, error) {
 	return kind, nil
 }
 
+// TODO(MrCroxx): review me
 func (b *Builder) setTargetLeaderIfNotExist() {
-	if b.targetLeaderStoreID != 0 {
+	if b.targetLeaderStoreID != 0 || len(b.targetCandidatesStoreIDs) != 0 {
 		return
 	}
 
@@ -583,6 +613,7 @@ func (b *Builder) preferOldPeerAsLeader(targetLeaderStoreID uint64) int {
 	return -b.peerAddStep[targetLeaderStoreID]
 }
 
+// TODO(MrCroxx): review me
 // Some special cases, and stores that do not support using joint consensus.
 func (b *Builder) buildStepsWithoutJointConsensus(kind OpKind) (OpKind, error) {
 	b.initStepPlanPreferFuncs()
@@ -635,6 +666,10 @@ func (b *Builder) buildStepsWithoutJointConsensus(kind OpKind) (OpKind, error) {
 func (b *Builder) execTransferLeader(id uint64) {
 	b.steps = append(b.steps, TransferLeader{FromStore: b.currentLeaderStoreID, ToStore: id})
 	b.currentLeaderStoreID = id
+}
+
+func (b *Builder) execTransferLeaderV2() {
+	b.steps = append(b.steps, &TransferLeaderV2{FromStore: b.currentLeaderStoreID, ToStore: 0, Candidates: b.targetCandidatesStoreIDs})
 }
 
 func (b *Builder) execPromoteLearner(peer *metapb.Peer) {

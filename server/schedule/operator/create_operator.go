@@ -58,6 +58,15 @@ func CreateTransferLeaderOperator(desc string, cluster opt.Cluster, region *core
 		Build(kind)
 }
 
+// TODO(MrCroxx): review me
+// CreateTransferLeaderOperatorV2 creates an operator that transfers the leader from a source store to one of the target stores.
+// It will leave TiKV to decide which store to transfer leader to.
+func CreateTransferLeaderOperatorV2(desc string, cluster opt.Cluster, region *core.RegionInfo, sourceStoreID uint64, targetStoreIDs []uint64, kind OpKind) (*Operator, error) {
+	return NewBuilder(desc, cluster, region, SkipOriginJointStateCheck).
+		SetCandidates(targetStoreIDs).
+		Build(kind)
+}
+
 // CreateForceTransferLeaderOperator creates an operator that transfers the leader from a source store to a target store forcible.
 func CreateForceTransferLeaderOperator(desc string, cluster opt.Cluster, region *core.RegionInfo, sourceStoreID uint64, targetStoreID uint64, kind OpKind) (*Operator, error) {
 	return NewBuilder(desc, cluster, region, SkipOriginJointStateCheck).

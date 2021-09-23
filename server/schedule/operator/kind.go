@@ -42,6 +42,9 @@ const (
 	OpRegion
 	// Include leader transfer.
 	OpLeader
+	// Include leader transfer v2.
+	// PD will return a list of potential leaders and let TiKV to decide which one to transfer leader to.
+	OpLeaderV2
 	opMax
 )
 
@@ -54,6 +57,7 @@ var flagToName = map[OpKind]string{
 	OpReplica:   "replica",
 	OpMerge:     "merge",
 	OpRange:     "range",
+	OpLeaderV2:  "leader-v2",
 }
 
 var nameToFlag = map[string]OpKind{
@@ -65,6 +69,7 @@ var nameToFlag = map[string]OpKind{
 	"replica":    OpReplica,
 	"merge":      OpMerge,
 	"range":      OpRange,
+	"leader-v2":  OpLeaderV2,
 }
 
 func (k OpKind) String() string {

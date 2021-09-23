@@ -630,6 +630,7 @@ func (oc *OperatorController) GetWaitingOperators() []*operator.Operator {
 	return oc.wop.ListOperator()
 }
 
+// TODO(MrCroxx): review me
 // SendScheduleCommand sends a command to the region.
 func (oc *OperatorController) SendScheduleCommand(region *core.RegionInfo, step operator.OpStep, source string) {
 	log.Info("send schedule command",
@@ -643,6 +644,16 @@ func (oc *OperatorController) SendScheduleCommand(region *core.RegionInfo, step 
 		cmd = &pdpb.RegionHeartbeatResponse{
 			TransferLeader: &pdpb.TransferLeader{
 				Peer: region.GetStorePeer(st.ToStore),
+			},
+		}
+	case *operator.TransferLeaderV2:
+		peers := make([]*metapb.Peer, 0, len(st.Candidates))
+		for _, storeID := range st.Candidates {
+			peers = append(peers, region.GetStorePeer(storeID))
+		}
+		cmd = &pdpb.RegionHeartbeatResponse{
+			TransferLeaderV2: &pdpb.TransferLeaderV2{
+				Peers: peers,
 			},
 		}
 	case operator.AddPeer:
