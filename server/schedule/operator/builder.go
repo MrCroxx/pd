@@ -655,6 +655,9 @@ func (b *Builder) buildStepsWithoutJointConsensus(kind OpKind) (OpKind, error) {
 		// Transfer only when target leader is legal.
 		b.execTransferLeader(b.targetLeaderStoreID)
 		kind |= OpLeader
+	} else if len(b.targetCandidatesStoreIDs) > 0 {
+		b.execTransferLeaderV2()
+		kind |= OpLeaderV2
 	}
 
 	if len(b.steps) == 0 {
@@ -669,7 +672,7 @@ func (b *Builder) execTransferLeader(id uint64) {
 }
 
 func (b *Builder) execTransferLeaderV2() {
-	b.steps = append(b.steps, &TransferLeaderV2{FromStore: b.currentLeaderStoreID, ToStore: 0, Candidates: b.targetCandidatesStoreIDs})
+	b.steps = append(b.steps, TransferLeaderV2{FromStore: b.currentLeaderStoreID, ToStore: 0, Candidates: b.targetCandidatesStoreIDs})
 }
 
 func (b *Builder) execPromoteLearner(peer *metapb.Peer) {

@@ -97,11 +97,10 @@ func (tlv2 TransferLeaderV2) String() string {
 }
 
 // IsFinish checks if current step is finished.
-func (tlv2 *TransferLeaderV2) IsFinish(region *core.RegionInfo) bool {
+func (tlv2 TransferLeaderV2) IsFinish(region *core.RegionInfo) bool {
 	currentLeader := region.GetLeader().GetStoreId()
 	for _, storeID := range tlv2.Candidates {
 		if currentLeader == storeID {
-			tlv2.FromStore = storeID
 			return true
 		}
 	}

@@ -646,7 +646,8 @@ func (oc *OperatorController) SendScheduleCommand(region *core.RegionInfo, step 
 				Peer: region.GetStorePeer(st.ToStore),
 			},
 		}
-	case *operator.TransferLeaderV2:
+	case operator.TransferLeaderV2:
+		log.Info("send transfer leader v2", zap.Uint64("region-id", region.GetID()), zap.Reflect("step", step))
 		peers := make([]*metapb.Peer, 0, len(st.Candidates))
 		for _, storeID := range st.Candidates {
 			peers = append(peers, region.GetStorePeer(storeID))
