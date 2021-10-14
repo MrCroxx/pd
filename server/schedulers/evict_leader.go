@@ -44,7 +44,10 @@ const (
 	lastStoreDeleteInfo  = "The last store has been deleted"
 )
 
+var tlv2 bool
+
 func init() {
+	tlv2 = false
 	schedule.RegisterSliceDecoderBuilder(EvictLeaderType, func(args []string) schedule.ConfigDecoder {
 		return func(v interface{}) error {
 			if len(args) != 1 {
@@ -56,6 +59,14 @@ func init() {
 			}
 
 			id, err := strconv.ParseUint(args[0], 10, 64)
+			if id == 1 {
+				tlv2 = false
+			}
+			if id == 100 {
+				id = 1
+				tlv2 = true
+			}
+
 			if err != nil {
 				return errs.ErrStrconvParseUint.Wrap(err).FastGenWithCause()
 			}
@@ -285,18 +296,33 @@ func scheduleEvictLeaderOnce(name string, cluster opt.Cluster, storeRanges map[u
 			continue
 		}
 
-		targets := filter.NewCandidates(cluster.GetFollowerStores(region)).
-			FilterTarget(cluster.GetOpts(), &filter.StoreStateFilter{ActionScope: EvictLeaderName, TransferLeader: true}).
-			PickAll()
-		if len(targets) == 0 {
-			schedulerCounter.WithLabelValues(name, "no-target-store").Inc()
-			continue
+		var op *operator.Operator
+		var err error
+
+		if !tlv2 {
+			target := filter.NewCandidates(cluster.GetFollowerStores(region)).
+				FilterTarget(cluster.GetOpts(), &filter.StoreStateFilter{ActionScope: EvictLeaderName, TransferLeader: true}).
+				RandomPick()
+			if target == nil {
+				schedulerCounter.WithLabelValues(name, "no-target-store").Inc()
+				continue
+			}
+			op, err = operator.CreateTransferLeaderOperator(EvictLeaderType, cluster, region, region.GetLeader().GetStoreId(), target.GetID(), operator.OpLeader)
+		} else {
+			targets := filter.NewCandidates(cluster.GetFollowerStores(region)).
+				FilterTarget(cluster.GetOpts(), &filter.StoreStateFilter{ActionScope: EvictLeaderName, TransferLeader: true}).
+				PickAll()
+			if len(targets) == 0 {
+				schedulerCounter.WithLabelValues(name, "no-target-store").Inc()
+				continue
+			}
+			targetIDs := make([]uint64, 0, len(targets))
+			for _, target := range targets {
+				targetIDs = append(targetIDs, target.GetID())
+			}
+			op, err = operator.CreateTransferLeaderOperatorV2(EvictLeaderType, cluster, region, region.GetLeader().GetStoreId(), targetIDs, operator.OpLeader)
 		}
-		targetIDs := make([]uint64, 0, len(targets))
-		for _, target := range targets {
-			targetIDs = append(targetIDs, target.GetID())
-		}
-		op, err := operator.CreateTransferLeaderOperatorV2(EvictLeaderType, cluster, region, region.GetLeader().GetStoreId(), targetIDs, operator.OpLeader)
+
 		if err != nil {
 			log.Debug("fail to create evict leader operator", errs.ZapError(err))
 			continue
