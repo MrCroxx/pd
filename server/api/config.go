@@ -561,3 +561,12 @@ func (h *confHandler) SetTenantQuota(w http.ResponseWriter, r *http.Request) {
 	h.svr.GetRaftCluster().SetTenantQuota(uint32(tenantID), uint64(writeBytesPerSec), uint32(readMilliCPU))
 	h.rd.JSON(w, http.StatusOK, "Set quota success.")
 }
+
+// @Tags config
+// @Summary Get tenant quota config.
+// @Produce json
+// @Success 200 {object} config.TenantQuotaConfig
+// @Router /config/tenant-quota [get]
+func (h *confHandler) GetTenantQuota(w http.ResponseWriter, r *http.Request) {
+	h.rd.JSON(w, http.StatusOK, h.svr.GetRaftCluster().DumpTenantQuotas())
+}

@@ -74,6 +74,7 @@ func NewShowConfigCommand() *cobra.Command {
 	sc.AddCommand(NewShowClusterVersionCommand())
 	sc.AddCommand(newShowReplicationModeCommand())
 	sc.AddCommand(NewShowServerConfigCommand())
+	sc.AddCommand(NewShowTenantQuotaCommand())
 	return sc
 }
 
@@ -141,6 +142,14 @@ func NewShowServerConfigCommand() *cobra.Command {
 		Use:   "server",
 		Short: "show PD server config",
 		Run:   showServerCommandFunc,
+	}
+}
+
+func NewShowTenantQuotaCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "quota <tenant-id>",
+		Short: "get read and write quota for a tenant, 1000 millicpu equal to 1vCPU",
+		Run:   showTenantQuotaCommandFunc,
 	}
 }
 
@@ -327,6 +336,15 @@ func showServerCommandFunc(cmd *cobra.Command, args []string) {
 	r, err := doRequest(cmd, pdServerPrefix, http.MethodGet)
 	if err != nil {
 		cmd.Printf("Failed to get server config: %s\n", err)
+		return
+	}
+	cmd.Println(r)
+}
+
+func showTenantQuotaCommandFunc(cmd *cobra.Command, args []string) {
+	r, err := doRequest(cmd, tenantQuotaPrefix, http.MethodGet)
+	if err != nil {
+		cmd.Printf("Failed to get tenant quota config: %s\n", err)
 		return
 	}
 	cmd.Println(r)
